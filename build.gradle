@@ -1,0 +1,18 @@
+apply plugin: 'java'
+
+sourceCompatibility = 1.8
+version = '1.0'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    testCompile group: 'junit', name: 'junit', version: '4.11'
+
+    compile group: 'com.sparkjava', name: 'spark-core', version: '2.+'
+    compile group: 'de.neuland-bfi', name: 'jade4j', version: '1.1.+'
+    compile group: 'org.python', name: 'jython-standalone', version: '2.7.0'
+    compile group: 'org.hsqldb', name: 'hsqldb', version: '2.3.3'
+    compile group: 'com.liferay', name: 'nl.captcha.simplecaptcha', version: '1.1.1'
+}
