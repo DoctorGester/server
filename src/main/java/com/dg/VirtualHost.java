@@ -156,13 +156,13 @@ public class VirtualHost {
 	}
 
 	public boolean updateRewriteEngine(){
-		/*if (!rewriteFile.exists())
+		if (!Files.exists(rewriteFile))
 			return false;
 
-		if (rewriteFile.lastModified() == rewriteFileLastUpdated)
-			return true;*/
-
 		try {
+			if (Files.getLastModifiedTime(rewriteFile).toMillis() == rewriteFileLastUpdated)
+				return true;
+			
 			rewriteRules.clear();
 			Files.readAllLines(rewriteFile).forEach(line -> {
 				if (line.startsWith("rewrite")){
@@ -176,7 +176,7 @@ public class VirtualHost {
 				}
 			});
 
-			//rewriteFileLastUpdated = rewriteFile.lastModified();
+			rewriteFileLastUpdated = Files.getLastModifiedTime(rewriteFile).toMillis();
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
