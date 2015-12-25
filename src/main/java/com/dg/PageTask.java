@@ -20,6 +20,7 @@ public interface PageTask {
 	public void setCookie(String name, String value);
 	public VirtualHost getHost();
 	public Map<String, String> getQuery();
+	public String getQueryString();
 	public String getParam(String name);
 	public OutputStream getOutputStream() throws IOException;
 	public long getDate(String key);

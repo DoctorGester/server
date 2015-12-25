@@ -64,6 +64,7 @@ public class VirtualHost {
 
 				return rewriteUrl(result);
 			}
+
 		return url;
 	}
 
@@ -162,7 +163,7 @@ public class VirtualHost {
 		try {
 			if (Files.getLastModifiedTime(rewriteFile).toMillis() == rewriteFileLastUpdated)
 				return true;
-			
+
 			rewriteRules.clear();
 			Files.readAllLines(rewriteFile).forEach(line -> {
 				if (line.startsWith("rewrite")){

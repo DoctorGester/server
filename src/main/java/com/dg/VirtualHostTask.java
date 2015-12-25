@@ -2,6 +2,7 @@ package com.dg;
 
 import de.neuland.jade4j.template.JadeTemplate;
 import org.apache.commons.lang3.StringEscapeUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.python.core.PyBaseCode;
 import org.python.core.PyCode;
 import org.python.core.PyDictionary;
@@ -25,22 +26,11 @@ public class VirtualHostTask implements PageTask {
 	private VirtualHost host;
 	private Request request;
 	private Response response;
+	private String queryString;
 	private Map<String, Object> model = new HashMap<>();
 	private Map<String, String> queryParams = new HashMap<>();
 	private Map<String, String> bodyParams = new HashMap<>();
 	private StringBuffer body;
-
-	public static final String CONTENT_TYPE[] = {
-			"text/html",
-			"text/css",
-			"text/javascript",
-			"image/png",
-			"image/jpeg",
-			"image/x-icon",
-			"application/x-rar-compressed",
-			"application/octet-stream",
-			"application/zip"
-	};
 
 	public VirtualHostTask(VirtualHost virtualHost, Request request, Response response) {
 		this.host = virtualHost;
@@ -55,21 +45,24 @@ public class VirtualHostTask implements PageTask {
 		setDate("Date", System.currentTimeMillis());
 
 		String uri = request.uri().substring(1);
-		String query = "";
+		String query;
 
-		if (request.requestMethod().equals("POST")) {
-			uri += "?" + request.raw().getQueryString();
+		String rewritten = host.rewriteUrl(uri);
+
+		if (!rewritten.equals(uri)) {
+			uri = rewritten;
+			query = uri.substring(uri.indexOf("?") + 1);
+		} else {
+			query = request.raw().getQueryString();
 		}
 
-		uri = host.rewriteUrl(uri);
-
 		if (uri.contains("?")) {
-			query = uri.substring(uri.indexOf("?") + 1);
 			uri = uri.substring(0, uri.indexOf("?"));
 		}
 
+		queryString = query == null ? "" : query;
+
 		parseQuery(query);
-		parseBody(request.body());
 
 		if (!displayPage(uri)) {
 			Spark.halt(404);
@@ -113,6 +106,11 @@ public class VirtualHostTask implements PageTask {
 		return host;
 	}
 
+	@Override
+	public String getQueryString() {
+		return queryString;
+	}
+
 	private void parseQuery(String uri) {
 		try {
 			Map<String, List<String>> splitQuery = Utils.splitQuery(uri);
@@ -128,6 +126,11 @@ public class VirtualHostTask implements PageTask {
 
 	private void parseBody(String body) {
 		try {
+			if (!StringUtils.isAlphanumericSpace(body)) {
+				bodyParams = new HashMap<>();
+				return;
+			}
+
 			Map<String, List<String>> splitQuery = Utils.splitQuery(body);
 			bodyParams = new HashMap<>();
 
@@ -145,6 +148,11 @@ public class VirtualHostTask implements PageTask {
 
 	@Override
 	public String getParam(String name) {
+		// Lazy loading is important, or else multi-part uploads fail
+		if (bodyParams == null) {
+			parseBody(request.body());
+		}
+
 		return bodyParams.get(name);
 	}
 
@@ -186,7 +194,7 @@ public class VirtualHostTask implements PageTask {
 		globals.put("database", host.getDatabase());
 		globals.put("model", model);
 
-		response.type(CONTENT_TYPE[0]);
+		response.type("text/html");
 
 		try {
 			code.call(new PyFrame((PyBaseCode) code, globals));

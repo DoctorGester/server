@@ -26,14 +26,14 @@ public class Server {
 
 	public Server(int port) {
 		port(port);
-		threadPool(4, 16, -1);
+		threadPool(16);
 
 		Route route = (request, response) -> {
 			VirtualHost host = getHost(request);
 
 			if (host == null) {
 				halt(404);
-				return null;
+				return "";
 			}
 
 			return host.dispatch(request, response);
