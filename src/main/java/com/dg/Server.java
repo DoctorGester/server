@@ -94,7 +94,7 @@ public class Server {
 	private VirtualHost getHost(Request request){
 		String host = request.headers(HEADER_HOST).toLowerCase().replaceAll(":\\d{1,5}", "");
 		String name = synonyms.keySet().stream().filter(host::matches).findAny().orElse("");
-		VirtualHost virtualHost = hosts.get(name);
+		VirtualHost virtualHost = hosts.get(synonyms.get(name));
 
 		if (virtualHost == null) {
 			String newHost = defaultHost != null ? defaultHost : hosts.keySet().stream().findAny().orElse(null);
