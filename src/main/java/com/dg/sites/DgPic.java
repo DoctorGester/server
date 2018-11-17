@@ -108,7 +108,7 @@ public class DgPic {
             final String fileName = matcher.group("name") + ".jpg";
             final File imageFile;
 
-            if (matcher.group("mini") == null) {
+            if (matcher.group("mini") != null) {
                 imageFile = imageFileOrNone(Paths.get("scr", "mini", fileName).toFile());
             } else {
                 imageFile = imageFileOrNone(Paths.get("scr", fileName).toFile());
