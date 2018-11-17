@@ -15,8 +15,12 @@ public class Database {
 		this.path = path;
 	}
 
-	public void connect() throws SQLException {
-		connection = DriverManager.getConnection("jdbc:hsqldb:" + path, "sa", "");
+	public void connect() {
+		try {
+			connection = DriverManager.getConnection("jdbc:hsqldb:" + path, "sa", "");
+		} catch (SQLException e) {
+			throw new RuntimeException(e);
+		}
 	}
 
 	public Object[] fetch(ResultSet rs) throws SQLException{

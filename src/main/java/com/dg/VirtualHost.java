@@ -117,13 +117,9 @@ public class VirtualHost {
 	}
 
 	private void initDatabase(String dir){
-		try {
-			if (database == null){
-				database = new Database(getFile(dir) + "/db");
-				database.connect();
-			}
-		} catch (SQLException e) {
-			e.printStackTrace();
+		if (database == null){
+			database = new Database(getFile(dir) + "/db");
+			database.connect();
 		}
 	}
 
