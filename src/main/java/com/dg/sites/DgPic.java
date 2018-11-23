@@ -64,7 +64,7 @@ public class DgPic {
 
     private void start(final int port) {
         port(port);
-        threadPool(8);
+        threadPool(512);
 
         before((request, response) -> {
             if (request.raw().getAttribute("org.eclipse.jetty.multipartConfig") == null) {
