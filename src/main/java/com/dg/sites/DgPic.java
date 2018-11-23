@@ -4,18 +4,15 @@ import com.dg.Database;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
+import net.freeutils.httpserver.HTTPServer;
 import org.apache.commons.io.FileUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.imageio.ImageIO;
-import javax.servlet.MultipartConfigElement;
 import java.awt.*;
 import java.awt.image.BufferedImage;
-import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.InputStream;
-import java.io.OutputStream;
+import java.io.*;
 import java.nio.file.Paths;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -27,7 +24,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
-import static spark.Spark.*;
+import static net.freeutils.httpserver.HTTPServer.MultipartIterator.*;
 
 /**
  * @author doc
@@ -38,9 +35,9 @@ public class DgPic {
     private final ArrayList<String> allPossibleNames;
     private final Database database;
 
-    private final Pattern imageNamePattern = Pattern.compile("(?<name>[b-df-hj-np-tv-z][aeiouy][b-df-hj-np-tv-z][aeiouy][b-df-hj-np-tv-z])(?<mini>\\.mini)?");
+    private final Pattern imagePathPattern = Pattern.compile("/(?<name>[b-df-hj-np-tv-z][aeiouy][b-df-hj-np-tv-z][aeiouy][b-df-hj-np-tv-z])(?<mini>\\.mini)?");
 
-    private DgPic(final int port) {
+    private DgPic(final HTTPServer.VirtualHost host) {
         log.info("Starting up");
 
         allPossibleNames = generateAllPossibleFileNames();
@@ -51,58 +48,90 @@ public class DgPic {
         database.connect();
         log.info("Connection established");
 
-        start(port);
-
-        awaitInitialization();
+        start(host);
 
         log.info("Done!");
     }
 
-    public static void ignite(final int port) {
-        new DgPic(port);
+    public static void ignite(final HTTPServer.VirtualHost host) {
+        new DgPic(host);
     }
 
-    private void start(final int port) {
-        port(port);
-        threadPool(8);
+    private HTTPServer.ContextHandler wrapHandler(final HTTPServer.ContextHandler handler) {
+        return (req, res) -> {
+            try {
+                /*String accept = req.getHeaders().get("Accept-Encoding");
 
-        before((request, response) -> {
-            if (request.raw().getAttribute("org.eclipse.jetty.multipartConfig") == null) {
-                MultipartConfigElement config = new MultipartConfigElement(System.getProperty("java.io.tmpdir"));
-                request.raw().setAttribute("org.eclipse.jetty.multipartConfig", config);
+                if (accept != null && accept.contains("gzip")) {
+                    res.getHeaders().add("Content-Encoding", "gzip");
+                }*/
+
+                return handler.serve(req, res);
+            } catch (final Exception e) {
+                log.error("Error when handling request {}", req.getURI(), e);
+
+                return 500;
             }
-        });
+        };
+    }
 
-        post("/upload", (req, res) -> {
-            final String versionParam = req.queryParams("version");
-            final int version = versionParam == null ? 0 : Integer.valueOf(versionParam);
+    private void post(final HTTPServer.VirtualHost host, final String path, final HTTPServer.ContextHandler handler) {
+        host.addContext(path, wrapHandler(handler), "POST");
+    }
+
+    private void get(final HTTPServer.VirtualHost host, final String path, final HTTPServer.ContextHandler handler) {
+        host.addContext(path, wrapHandler(handler), "GET");
+    }
+
+    private Iterable<Part> multipartParts(final HTTPServer.Request request) {
+        try {
+            final HTTPServer.MultipartIterator iterator = new HTTPServer.MultipartIterator(request);
+
+            return () -> iterator;
+        } catch (final IOException e) {
+            log.error("Error while reading multipart data", e);
+            throw new RuntimeException(e);
+        }
+    }
+
+    private void start(final HTTPServer.VirtualHost host) {
+        post(host, "/upload", (req, res) -> {
+            final int version = Integer.valueOf(req.getParams().getOrDefault("version", "1"));
 
             switch (version) {
                 case 0: {
-                    try (final InputStream in = req.raw().getInputStream()) {
-                        return uploadImage(in, req.ip());
-                    }
+                    res.send(200, uploadImage(req.getBody()));
+
+                    break;
                 }
 
                 case 1: {
-                    try (final InputStream in = req.raw().getPart("image").getInputStream()) {
-                        final String name = uploadImage(in, req.ip());
-                        return String.format("{ \"success\": true, \"answer\": { \"url\": \"%s\" } }", name);
+                    for (Part part: multipartParts(req)) {
+                        if ("image".equals(part.getName())) {
+                            final String name = uploadImage(part.getBody());
+                            res.send(200, String.format("{ \"success\": true, \"answer\": { \"url\": \"%s\" } }", name));
+
+                            return 0;
+                        }
                     }
+
+                    return 400;
                 }
 
                 default: {
                     throw new IllegalArgumentException("Incorrect version: " + version);
                 }
             }
+
+            return 0;
         });
 
-        get("/:fileName", (req, res) -> {
-            final String fileUrl = req.params(":fileName");
-            final Matcher matcher = imageNamePattern.matcher(fileUrl);
+        get(host, "/", (req, res) -> {
+            final String fileUrl = req.getPath();
+            final Matcher matcher = imagePathPattern.matcher(fileUrl);
 
             if (!matcher.matches()) {
-                halt(404);
+                return 404;
             }
 
             final String fileName = matcher.group("name") + ".jpg";
@@ -114,21 +143,13 @@ public class DgPic {
                 imageFile = imageFileOrNone(Paths.get("scr", fileName).toFile());
             }
 
-            res.header("Content-Type", "image/jpeg");
-            res.header("Content-Length", String.valueOf(imageFile.length()));
+            res.getHeaders().add("Content-Type", "image/jpeg");
+            res.getHeaders().add("Content-Length", String.valueOf(imageFile.length()));
 
-            try (OutputStream out = res.raw().getOutputStream()) {
-                FileUtils.copyFile(imageFile, out);
-            }
+            res.sendHeaders(200);
+            FileUtils.copyFile(imageFile, res.getBody());
 
-            return "";
-        });
-
-        exception(Exception.class, (exception, req, res) -> {
-            log.error("Error in {}", req.pathInfo(), exception);
-
-            res.status(500);
-            res.body(String.format("{ \"success\": false, \"message\": \"%s\" }", exception.getMessage()));
+            return 0;
         });
     }
 
@@ -303,7 +324,7 @@ public class DgPic {
         }
     }
 
-    private String saveNewImage(final String fromIp, final BufferedImage image, final byte[] imageData) {
+    private String saveNewImage(final BufferedImage image, final byte[] imageData) {
         try {
             log.info("Trying to upload a new image of resolution {}x{}", image.getWidth(), image.getHeight());
 
@@ -314,9 +335,8 @@ public class DgPic {
 
             FileUtils.writeByteArrayToFile(new File("scr", name + ".jpg"), imageData);
 
-            try (final PreparedStatement query = query("UPDATE SCREENS SET UPLOADED = NOW(), FREE = FALSE, UPLOAD_IP = ? WHERE NAME = ?")) {
-                query.setString(1, fromIp);
-                query.setString(2, name);
+            try (final PreparedStatement query = query("UPDATE SCREENS SET UPLOADED = NOW(), FREE = FALSE WHERE NAME = ?")) {
+                query.setString(1, name);
                 query.execute();
             }
 
@@ -330,7 +350,7 @@ public class DgPic {
         }
     }
 
-    private String uploadImage(final InputStream inputStream, final String ip) throws Exception {
+    private String uploadImage(final InputStream inputStream) throws IOException {
         final BufferedImage inputImage = ImageIO.read(inputStream);
 
         final ByteArrayOutputStream pngOut = new ByteArrayOutputStream();
@@ -339,14 +359,14 @@ public class DgPic {
         final int twoMegabytes = 2 * 1024 * 1024;
 
         if (pngOut.size() <= twoMegabytes) {
-            return saveNewImage(ip, inputImage, pngOut.toByteArray());
+            return saveNewImage(inputImage, pngOut.toByteArray());
         }
 
         final ByteArrayOutputStream jpgOut = new ByteArrayOutputStream();
         ImageIO.write(inputImage, "jpg", jpgOut);
 
         if (jpgOut.size() <= twoMegabytes) {
-            return saveNewImage(ip, inputImage, jpgOut.toByteArray());
+            return saveNewImage(inputImage, jpgOut.toByteArray());
         }
 
         throw new IllegalArgumentException("Image is too large to be saved");
