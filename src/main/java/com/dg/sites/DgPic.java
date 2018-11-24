@@ -3,12 +3,15 @@ package com.dg.sites;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 import net.freeutils.httpserver.HTTPServer;
 import org.apache.commons.io.FileUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.imageio.ImageIO;
+import javax.sql.DataSource;
 import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.io.*;
@@ -31,7 +34,7 @@ public class DgPic {
     private static Logger log = LoggerFactory.getLogger(DgPic.class);
 
     private final ArrayList<String> allPossibleNames;
-    private final Connection database;
+    private final DataSource database;
 
     private final Pattern imagePathPattern = Pattern.compile("/(?<name>[b-df-hj-np-tv-z][aeiouy][b-df-hj-np-tv-z][aeiouy][b-df-hj-np-tv-z])(?<mini>\\.mini)?");
 
@@ -44,8 +47,15 @@ public class DgPic {
         log.info("Generated all names, connecting to db...");
 
         try {
-            database = DriverManager.getConnection("jdbc:hsqldb:database/db", "sa", "");
-        } catch (final SQLException e) {
+            final HikariConfig hikariConfig = new HikariConfig();
+            hikariConfig.setDriverClassName("org.hsqldb.jdbc.JDBCDriver");
+            hikariConfig.setJdbcUrl("jdbc:hsqldb:database/db");
+            hikariConfig.setUsername("sa");
+            hikariConfig.setPassword("");
+            hikariConfig.setMaximumPoolSize(64);
+
+            database = new HikariDataSource(hikariConfig);
+        } catch (final Exception e) {
             log.error("Error while connecting to the database", e);
             throw new RuntimeException(e);
         }
@@ -299,16 +309,17 @@ public class DgPic {
         return builder.build();
     }
 
-    private PreparedStatement query(final String query) {
+    private PreparedStatement query(final Connection connection, final String query) {
         try {
-            return database.prepareStatement(query);
+            return connection.prepareStatement(query);
         } catch (SQLException e) {
             throw new RuntimeException(e);
         }
     }
 
     private String getNextFileName() {
-        try (final ResultSet result = query("SELECT NAME FROM SCREENS WHERE FREE = TRUE ORDER BY RAND() LIMIT 1").executeQuery()) {
+        try (final Connection connection = database.getConnection();
+             final ResultSet result = query(connection, "SELECT NAME FROM SCREENS WHERE FREE = TRUE ORDER BY RAND() LIMIT 1").executeQuery()) {
             if (result.next()) {
                 return result.getString("NAME");
             }
@@ -324,7 +335,7 @@ public class DgPic {
                             "insert values vars.name, NOW(), 0, NULL, TRUE";
 
             for (final String name : moreNames) {
-                try (final PreparedStatement mergeNameQuery = query(mergeName)) {
+                try (final PreparedStatement mergeNameQuery = query(connection, mergeName)) {
                     mergeNameQuery.setString(1, name);
                     mergeNameQuery.execute();
                 }
@@ -347,7 +358,8 @@ public class DgPic {
 
             FileUtils.writeByteArrayToFile(new File("scr", name + ".jpg"), imageData);
 
-            try (final PreparedStatement query = query("UPDATE SCREENS SET UPLOADED = NOW(), FREE = FALSE WHERE NAME = ?")) {
+            try (final Connection connection = database.getConnection();
+                 final PreparedStatement query = query(connection, "UPDATE SCREENS SET UPLOADED = NOW(), FREE = FALSE WHERE NAME = ?")) {
                 query.setString(1, name);
                 query.execute();
             }

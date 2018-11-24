@@ -6,6 +6,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 /**
  * @author doc
@@ -26,6 +29,7 @@ public class Server {
         }
 
         final HTTPServer server = new HTTPServer(port);
+        server.setExecutor(new ThreadPoolExecutor(8, Integer.MAX_VALUE, 300, TimeUnit.SECONDS, new SynchronousQueue<>()));
 
         try {
             server.start();
