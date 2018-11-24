@@ -1,6 +1,5 @@
 package com.dg.sites;
 
-import com.dg.Database;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
@@ -13,10 +12,9 @@ import javax.imageio.ImageIO;
 import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.io.*;
+import java.net.SocketException;
 import java.nio.file.Paths;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
+import java.sql.*;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -33,7 +31,7 @@ public class DgPic {
     private static Logger log = LoggerFactory.getLogger(DgPic.class);
 
     private final ArrayList<String> allPossibleNames;
-    private final Database database;
+    private final Connection database;
 
     private final Pattern imagePathPattern = Pattern.compile("/(?<name>[b-df-hj-np-tv-z][aeiouy][b-df-hj-np-tv-z][aeiouy][b-df-hj-np-tv-z])(?<mini>\\.mini)?");
 
@@ -44,8 +42,14 @@ public class DgPic {
         Collections.shuffle(allPossibleNames);
 
         log.info("Generated all names, connecting to db...");
-        database = new Database("database/db");
-        database.connect();
+
+        try {
+            database = DriverManager.getConnection("jdbc:hsqldb:database/db", "sa", "");
+        } catch (final SQLException e) {
+            log.error("Error while connecting to the database", e);
+            throw new RuntimeException(e);
+        }
+
         log.info("Connection established");
 
         start(host);
@@ -131,6 +135,8 @@ public class DgPic {
             final Matcher matcher = imagePathPattern.matcher(fileUrl);
 
             if (!matcher.matches()) {
+                log.info("Tried to access unmapped {}", req.getPath());
+
                 return 404;
             }
 
@@ -147,7 +153,13 @@ public class DgPic {
             res.getHeaders().add("Content-Length", String.valueOf(imageFile.length()));
 
             res.sendHeaders(200);
-            FileUtils.copyFile(imageFile, res.getBody());
+
+            try {
+                FileUtils.copyFile(imageFile, res.getBody());
+            } catch (final SocketException exception) {
+                log.error("Socket exception when streaming image file: {}", exception.getMessage());
+                return 0;
+            }
 
             return 0;
         });
@@ -289,7 +301,7 @@ public class DgPic {
 
     private PreparedStatement query(final String query) {
         try {
-            return database.getConnection().prepareStatement(query);
+            return database.prepareStatement(query);
         } catch (SQLException e) {
             throw new RuntimeException(e);
         }
