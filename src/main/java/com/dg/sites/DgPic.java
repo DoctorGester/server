@@ -1,8 +1,5 @@
 package com.dg.sites;
 
-import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Sets;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import net.freeutils.httpserver.HTTPServer;
@@ -14,18 +11,18 @@ import javax.imageio.ImageIO;
 import javax.sql.DataSource;
 import java.awt.*;
 import java.awt.image.BufferedImage;
-import java.io.*;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
 import java.net.SocketException;
 import java.nio.file.Paths;
 import java.sql.*;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
+import java.util.Random;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
-import static net.freeutils.httpserver.HTTPServer.MultipartIterator.*;
+import static net.freeutils.httpserver.HTTPServer.MultipartIterator.Part;
 
 /**
  * @author doc
@@ -33,18 +30,20 @@ import static net.freeutils.httpserver.HTTPServer.MultipartIterator.*;
 public class DgPic {
     private static Logger log = LoggerFactory.getLogger(DgPic.class);
 
-    private final ArrayList<String> allPossibleNames;
+    private final int[] allPossibleNamesEncoded;
+    private int nameCursor = 0;
+
     private final DataSource database;
 
     private final Pattern imagePathPattern = Pattern.compile("/(?<name>[b-df-hj-np-tv-z][aeiouy][b-df-hj-np-tv-z][aeiouy][b-df-hj-np-tv-z])(?<mini>\\.mini)?");
 
     private DgPic(final HTTPServer.VirtualHost host) {
-        log.info("Starting up");
+        log.info("Igniting");
 
-        allPossibleNames = generateAllPossibleFileNames();
-        Collections.shuffle(allPossibleNames);
+        allPossibleNamesEncoded = generateAllPossibleFileNames();
+        System.gc();
 
-        log.info("Generated all names, connecting to db...");
+        log.info("Generated all {} names, connecting to db...", allPossibleNamesEncoded.length);
 
         try {
             final HikariConfig hikariConfig = new HikariConfig();
@@ -52,9 +51,15 @@ public class DgPic {
             hikariConfig.setJdbcUrl("jdbc:hsqldb:database/db");
             hikariConfig.setUsername("sa");
             hikariConfig.setPassword("");
-            hikariConfig.setMaximumPoolSize(64);
+            hikariConfig.setMaximumPoolSize(4);
 
             database = new HikariDataSource(hikariConfig);
+
+            try (final Connection connection = database.getConnection()) {
+                for (final String table: new String[] { "VIEWS", "USERS", "GALLERY_MEMBERS", "TOKENS", "DOWNLOADS", "CAPTCHAS", "VIEWS_BY_REFERER" }) {
+                    setTableCached(connection, table);
+                }
+            }
         } catch (final Exception e) {
             log.error("Error while connecting to the database", e);
             throw new RuntimeException(e);
@@ -69,6 +74,12 @@ public class DgPic {
 
     public static void ignite(final HTTPServer.VirtualHost host) {
         new DgPic(host);
+    }
+
+    private static void setTableCached(final Connection connection, final String table) throws SQLException {
+        try (final CallableStatement call = connection.prepareCall("SET TABLE " + table + " TYPE CACHED")) {
+            log.info("Set table cached {}: {}", table, call.execute());
+        }
     }
 
     private HTTPServer.ContextHandler wrapHandler(final HTTPServer.ContextHandler handler) {
@@ -275,38 +286,75 @@ public class DgPic {
         return thumbnail;
     }
 
-    private ArrayList<String> generateAllPossibleFileNames() {
-        final ImmutableSet<Character> vowels = ImmutableSet.of('a', 'e', 'y', 'u', 'i', 'o');
-        final ImmutableSet<Character> consonants = ImmutableSet.of(
-                'q', 'w', 'r', 't', 'p', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', 'z', 'x', 'c', 'v', 'b', 'n', 'm');
-
-        final ImmutableList<ImmutableSet<Character>> nameGeneratorBase = ImmutableList.of(
-                consonants, vowels, consonants, vowels, consonants
-        );
-
-        final ImmutableSet<List<Character>> product = ImmutableSet.copyOf(Sets.cartesianProduct(nameGeneratorBase));
-
-        return product.stream().map(characters -> {
-            final char[] result = new char[characters.size()];
-
-            for (int index = 0; index < characters.size(); index++) {
-                result[index] = characters.get(index);
-            }
-
-            return new String(result);
-        }).collect(Collectors.toCollection(ArrayList::new));
+    private static void shuffleArray(int[] array) {
+        int index, temp;
+        final Random random = new Random();
+        for (int i = array.length - 1; i > 0; i--) {
+            index = random.nextInt(i + 1);
+            temp = array[index];
+            array[index] = array[i];
+            array[i] = temp;
+        }
     }
 
-    private synchronized ImmutableList<String> generateNextFileNames(int amount) {
-        final ImmutableList.Builder<String> builder = ImmutableList.builder();
+    private int[] generateAllPossibleFileNames() {
+        final char[] vowels = {'a', 'e', 'y', 'u', 'i', 'o'};
+        final char[] consonants = {'q', 'w', 'r', 't', 'p', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', 'z', 'x', 'c', 'v', 'b', 'n', 'm'};
+
+        int index = 0;
+
+        final int productSize = consonants.length * vowels.length * consonants.length * vowels.length * consonants.length;
+        final int[] product = new int[productSize];
+
+        for (final char c1 : consonants) {
+            for (final char c2 : vowels) {
+                for (final char c3 : consonants) {
+                    for (final char c4 : vowels) {
+                        for (final char c5 : consonants) {
+                            // 6 bits per char
+                            final int encoded =
+                                    (c1 - 'a') << 26 |
+                                    (c2 - 'a') << 20 |
+                                    (c3 - 'a') << 14 |
+                                    (c4 - 'a') << 8 |
+                                    (c5 - 'a') << 2;
+
+                            product[index++] = encoded;
+                        }
+                    }
+                }
+            }
+        }
+
+        shuffleArray(product);
+
+        return product;
+    }
+
+    private static String decodeWord(final int encoded) {
+        // Only using 6 bits
+        final int mask = 0b00000000000000000000000000111111;
+        final char c1 = (char) (((encoded >> 26) & mask) + 'a');
+        final char c2 = (char) (((encoded >> 20) & mask) + 'a');
+        final char c3 = (char) (((encoded >> 14) & mask) + 'a');
+        final char c4 = (char) (((encoded >> 8)  & mask) + 'a');
+        final char c5 = (char) (((encoded >> 2)  & mask) + 'a');
+
+        return new String(new char[] { c1, c2, c3, c4, c5 });
+    }
+
+    private synchronized String[] generateNextFileNames(int amount) {
+        final String[] result = new String[amount];
+
+        int index = 0;
 
         while (amount > 0) {
-            builder.add(allPossibleNames.remove(allPossibleNames.size() - 1));
+            result[index++] = decodeWord(allPossibleNamesEncoded[nameCursor++]);
 
             amount--;
         }
 
-        return builder.build();
+        return result;
     }
 
     private PreparedStatement query(final Connection connection, final String query) {
@@ -326,7 +374,7 @@ public class DgPic {
 
             log.info("No more names in the database, generating 100 more");
 
-            final ImmutableList<String> moreNames = generateNextFileNames(100);
+            final String[] moreNames = generateNextFileNames(100);
             final String mergeName =
                     "merge into screens using(values(?)) \n" +
                             "as vars(name)\n" +
