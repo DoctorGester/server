@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Dg-Pic</title>
+    <link href="/static/bootstrap/css/bootstrap.min.css" rel="stylesheet" media="screen">
+    <link href="/static/admin/jquery.fileupload-ui.css" rel="stylesheet">
+    <link href="/static/main.css" rel="stylesheet">
+    <meta charset="utf-8">
+</head>
+<body>
+<div class="navbar navbar-fixed-top">
+    <div class="navbar-inner">
+        <!--ul class="nav"><a class="brand" href="/">Dg-Pic</a>
+            <li class="dropdown"><a class="dropdown-toggle" id="home" href="/" data-toggle="dropdown" data-target="#"><i class="icon-home"></i> Home<span class="caret"></span></a>
+                <ul class="dropdown-menu" role="menu" aria-labelledby="home">
+                    <li role="presentation"><a href="#" role="menuitem" onclick="login()">Sign In</a></li>
+                    <li role="presentation"><a href="#" role="menuitem" onclick="register()">Sign Up</a></li>
+                </ul>
+            </li>
+            <li><a href="#" onclick="fileDialog()">Upload</a></li>
+            <li><a href="/download">Download</a></li>
+            <li><a href="/about">About</a></li>
+        </ul>
+        <ul class="nav pull-right">
+            <li><a href="/stats"> pictures total</a></li>
+        </ul-->
+    </div>
+</div>
+<div class="container-fluid" id="main-container">
+    <div class="page-header">
+        <h1>Dg-Pic <small>Home for Your screenshots</small></h1>
+    </div>
+    <button class="btn btn-primary" href="#" onclick="fileDialog()">Upload image</button>
+    <input id="hidden-uploader" type="file">
+    <div id="hidden-upload-box" contenteditable="true"></div>
+</div>
+</body>
+<script src="/static/main.js"></script>
+<script src="/static/jquery.min.js"></script>
+<script src="/static/bootstrap/js/bootstrap.min.js"></script>
+<script src="/static/admin/bootbox.min.js"></script>
+<script src="/static/jquery.ui.widget.js"></script>
+<script src="/static/admin/jquery.upload.min.js"></script>
+</html>

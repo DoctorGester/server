@@ -4,6 +4,7 @@ import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import net.freeutils.httpserver.HTTPServer;
 import org.apache.commons.io.FileUtils;
+import org.apache.commons.io.IOUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -11,13 +12,14 @@ import javax.imageio.ImageIO;
 import javax.sql.DataSource;
 import java.awt.*;
 import java.awt.image.BufferedImage;
-import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.IOException;
-import java.io.InputStream;
+import java.io.*;
 import java.net.SocketException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.sql.*;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Random;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -36,6 +38,26 @@ public class DgPic {
     private final DataSource database;
 
     private final Pattern imagePathPattern = Pattern.compile("/(?<name>[b-df-hj-np-tv-z][aeiouy][b-df-hj-np-tv-z][aeiouy][b-df-hj-np-tv-z])(?<mini>\\.mini)?");
+
+    private final Map<String, StaticFile> staticFiles;
+
+    private static class StaticFile {
+        private String contentType;
+        private byte[] cachedContents;
+
+        private StaticFile(String contentType, byte[] cachedContents) {
+            this.contentType = contentType;
+            this.cachedContents = cachedContents;
+        }
+
+        public String getContentType() {
+            return contentType;
+        }
+
+        public byte[] getCachedContents() {
+            return cachedContents;
+        }
+    }
 
     private DgPic(final HTTPServer.VirtualHost host) {
         log.info("Igniting");
@@ -67,6 +89,20 @@ public class DgPic {
 
         log.info("Connection established");
 
+        log.info("Enumerating static files");
+
+        staticFiles = new HashMap<>();
+
+        try {
+            Files.walk(Paths.get("static"))
+                    .filter(Files::isRegularFile)
+                    .forEach(path -> staticFiles.put(path.toString(), createStaticFile(path)));
+        } catch (final Exception e) {
+            log.error("Unable to enumerate static files", e);
+        }
+
+        log.info("Total static files: {}", staticFiles.size());
+
         start(host);
 
         log.info("Done!");
@@ -79,6 +115,49 @@ public class DgPic {
     private static void setTableCached(final Connection connection, final String table) throws SQLException {
         try (final CallableStatement call = connection.prepareCall("SET TABLE " + table + " TYPE CACHED")) {
             log.info("Set table cached {}: {}", table, call.execute());
+        }
+    }
+
+    private static StaticFile createStaticFile(final Path path) {
+        try {
+            final long size = Files.size(path);
+            final long maxSize = 1024 * 128; // 128kb
+            final byte[] contents;
+
+            if (size <= maxSize) {
+                contents = Files.readAllBytes(path);
+
+                log.info("Cached static file {} with size {}b", path, contents.length);
+            } else {
+                contents = null;
+
+                log.info("Serving {} from disk", path);
+            }
+
+            return new StaticFile(filePathToContentType(path.toString()), contents);
+        } catch (IOException e) {
+            throw new RuntimeException("Error when creating static file", e);
+        }
+    }
+
+    private static String filePathToContentType(final String filePath) {
+        final int index = filePath.lastIndexOf('.');
+
+        if (index == -1) {
+            return "application/octet-stream";
+        }
+
+        final String extenstion = filePath.substring(index + 1);
+
+        switch (extenstion) {
+            case "html": return "text/html";
+            case "js": return "text/javascript";
+            case "css": return "text/css";
+            case "png": return "image/png";
+            case "jpg": return "image/jpeg";
+            case "jpeg": return "image/jpeg";
+
+            default: return "application/octet-stream";
         }
     }
 
@@ -151,9 +230,40 @@ public class DgPic {
             return 0;
         });
 
+        get(host, "/static", (req, res) -> {
+            final String path = req.getPath();
+            final String relativePath = path.substring(1);
+            final StaticFile staticFile = staticFiles.get(relativePath);
+
+            if (staticFile == null) {
+                return 404;
+            }
+
+            final byte[] contents = staticFile.getCachedContents();
+
+            if (contents != null) {
+                setupOkResponse(res, staticFile.getContentType(), contents.length);
+
+                try {
+                    IOUtils.copyLarge(new ByteArrayInputStream(contents), res.getBody());
+                } catch (final SocketException exception) {
+                    log.error("Socket exception when streaming file: {}", exception.getMessage());
+                }
+
+                return 0;
+            }
+
+            return serveFile(res, new File(relativePath), staticFile.getContentType());
+        });
+
         get(host, "/", (req, res) -> {
-            final String fileUrl = req.getPath();
-            final Matcher matcher = imagePathPattern.matcher(fileUrl);
+            final String path = req.getPath();
+
+            if ("/".equals(path) || "/index.html".equals(path)) {
+                return serveFile(res, new File("static/index.html"), "text/html");
+            }
+
+            final Matcher matcher = imagePathPattern.matcher(path);
 
             if (!matcher.matches()) {
                 log.info("Tried to access unmapped {}", req.getPath());
@@ -170,20 +280,31 @@ public class DgPic {
                 imageFile = imageFileOrNone(Paths.get("scr", fileName).toFile());
             }
 
-            res.getHeaders().add("Content-Type", "image/jpeg");
-            res.getHeaders().add("Content-Length", String.valueOf(imageFile.length()));
-
-            res.sendHeaders(200);
-
-            try {
-                FileUtils.copyFile(imageFile, res.getBody());
-            } catch (final SocketException exception) {
-                log.error("Socket exception when streaming image file: {}", exception.getMessage());
-                return 0;
-            }
-
-            return 0;
+            return serveFile(res, imageFile, "image/jpeg");
         });
+    }
+
+    private void setupOkResponse(final HTTPServer.Response res, final String contentType, final long contentLength) throws IOException {
+        res.getHeaders().add("Content-Type", contentType);
+        res.getHeaders().add("Content-Length", String.valueOf(contentLength));
+
+        res.sendHeaders(200);
+    }
+
+    private int serveFile(final HTTPServer.Response res, final File file, final String contentType) throws IOException {
+        if (!file.exists()) {
+            return 404;
+        }
+
+        setupOkResponse(res, contentType, file.length());
+
+        try {
+            FileUtils.copyFile(file, res.getBody());
+        } catch (final SocketException exception) {
+            log.error("Socket exception when streaming file: {}", exception.getMessage());
+        }
+
+        return 0;
     }
 
     private File imageFileOrNone(final File file) {
