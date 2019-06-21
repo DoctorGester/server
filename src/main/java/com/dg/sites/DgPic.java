@@ -50,11 +50,11 @@ public class DgPic {
             this.cachedContents = cachedContents;
         }
 
-        public String getContentType() {
+        String getContentType() {
             return contentType;
         }
 
-        public byte[] getCachedContents() {
+        byte[] getCachedContents() {
             return cachedContents;
         }
     }
@@ -555,8 +555,18 @@ public class DgPic {
             return saveNewImage(inputImage, pngOut.toByteArray());
         }
 
+        // JPG doesn't support transparency!
+        final BufferedImage jpgImage = new BufferedImage(
+                inputImage.getWidth(null),
+                inputImage.getHeight(null),
+                BufferedImage.TYPE_INT_RGB
+        );
+
+        jpgImage.getGraphics().drawImage(inputImage, 0, 0 , null);
+        jpgImage.getGraphics().dispose();
+
         final ByteArrayOutputStream jpgOut = new ByteArrayOutputStream();
-        ImageIO.write(inputImage, "jpg", jpgOut);
+        ImageIO.write(jpgImage, "jpg", jpgOut);
 
         if (jpgOut.size() <= twoMegabytes) {
             return saveNewImage(inputImage, jpgOut.toByteArray());
