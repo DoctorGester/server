@@ -173,6 +173,7 @@ public class DgPic {
             case "png": return "image/png";
             case "jpg": return "image/jpeg";
             case "jpeg": return "image/jpeg";
+            case "ico": return "image/x-icon";
 
             default: return "application/octet-stream";
         }
@@ -260,37 +261,14 @@ public class DgPic {
             return 0;
         });
 
-        get(host, "/static", (req, res) -> {
-            final String path = req.getPath();
-            final String relativePath = path.substring(1);
-            final StaticFile staticFile = staticFiles.get(relativePath);
-
-            if (staticFile == null) {
-                return 404;
-            }
-
-            final byte[] contents = staticFile.getCachedContents();
-
-            if (contents != null) {
-                setupOkResponse(res, staticFile.getContentType(), contents.length);
-
-                try {
-                    IOUtils.copyLarge(new ByteArrayInputStream(contents), res.getBody());
-                } catch (final SocketException exception) {
-                    log.error("Socket exception when streaming file: {}", exception.getMessage());
-                }
-
-                return 0;
-            }
-
-            return serveFile(res, new File(relativePath), staticFile.getContentType());
-        });
+        get(host, "/favicon.ico", (req, res) -> serveStaticFile(res, "/static/favicon.ico"));
+        get(host, "/static", (req, res) -> serveStaticFile(res, req.getPath()));
 
         get(host, "/", (req, res) -> {
             final String path = req.getPath();
 
             if ("/".equals(path) || "/index.html".equals(path)) {
-                return serveFile(res, new File("static/index.html"), "text/html");
+                return serveStaticFile(res, "/static/index.html");
             }
 
             final Matcher matcher = imagePathPattern.matcher(path);
@@ -335,6 +313,31 @@ public class DgPic {
         }
 
         return 0;
+    }
+
+    private int serveStaticFile(final HTTPServer.Response res, final String pathStartingWithSlash) throws IOException {
+        final String relativePath = pathStartingWithSlash.substring(1);
+        final StaticFile staticFile = staticFiles.get(relativePath);
+
+        if (staticFile == null) {
+            return 404;
+        }
+
+        final byte[] contents = staticFile.getCachedContents();
+
+        if (contents != null) {
+            setupOkResponse(res, staticFile.getContentType(), contents.length);
+
+            try {
+                IOUtils.copyLarge(new ByteArrayInputStream(contents), res.getBody());
+            } catch (final SocketException exception) {
+                log.error("Socket exception when streaming file: {}", exception.getMessage());
+            }
+
+            return 0;
+        }
+
+        return serveFile(res, new File(relativePath), staticFile.getContentType());
     }
 
     private File imageFileOrNone(final File file) {
