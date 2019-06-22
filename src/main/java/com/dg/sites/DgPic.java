@@ -1,5 +1,9 @@
 package com.dg.sites;
 
+import com.sun.imageio.plugins.bmp.BMPImageReaderSpi;
+import com.sun.imageio.plugins.gif.GIFImageReaderSpi;
+import com.sun.imageio.plugins.jpeg.JPEGImageReaderSpi;
+import com.sun.imageio.plugins.png.PNGImageReaderSpi;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import net.freeutils.httpserver.HTTPServer;
@@ -9,8 +13,16 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.imageio.ImageIO;
+import javax.imageio.ImageReadParam;
+import javax.imageio.ImageReader;
+import javax.imageio.spi.IIORegistry;
+import javax.imageio.spi.ImageReaderSpi;
+import javax.imageio.stream.MemoryCacheImageInputStream;
 import javax.sql.DataSource;
-import java.awt.*;
+import java.awt.Color;
+import java.awt.Font;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.io.*;
 import java.net.SocketException;
@@ -18,13 +30,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.sql.*;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Random;
+import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static net.freeutils.httpserver.HTTPServer.MultipartIterator.Part;
+import static org.apache.commons.io.FileUtils.byteCountToDisplaySize;
 
 /**
  * @author doc
@@ -56,6 +67,12 @@ public class DgPic {
 
         byte[] getCachedContents() {
             return cachedContents;
+        }
+    }
+
+    private static class InvalidInputException extends RuntimeException {
+        InvalidInputException(final String message) {
+            super(message);
         }
     }
 
@@ -127,7 +144,7 @@ public class DgPic {
             if (size <= maxSize) {
                 contents = Files.readAllBytes(path);
 
-                log.info("Cached static file {} with size {}b", path, contents.length);
+                log.info("Cached static file {} with size {}", path, byteCountToDisplaySize(contents.length));
             } else {
                 contents = null;
 
@@ -171,6 +188,12 @@ public class DgPic {
                 }*/
 
                 return handler.serve(req, res);
+            } catch (final InvalidInputException invalidInput) {
+                log.error("Invalid input when handling request {}", req.getURI(), invalidInput);
+
+                res.send(400, invalidInput.getMessage());
+
+                return 0;
             } catch (final Exception e) {
                 log.error("Error when handling request {}", req.getURI(), e);
 
@@ -212,8 +235,15 @@ public class DgPic {
                 case 1: {
                     for (Part part: multipartParts(req)) {
                         if ("image".equals(part.getName())) {
-                            final String name = uploadImage(part.getBody());
-                            res.send(200, String.format("{ \"success\": true, \"answer\": { \"url\": \"%s\" } }", name));
+
+                            try {
+                                final String name = uploadImage(part.getBody());
+                                res.send(200, String.format("{ \"success\": true, \"answer\": { \"url\": \"%s\" } }", name));
+                            } catch (final InvalidInputException e) {
+                                res.send(400, String.format("{ \"success\": false, \"message\": \"%s\" }", e.getMessage()));
+
+                                log.error("Error while uploading image", e);
+                            }
 
                             return 0;
                         }
@@ -518,7 +548,7 @@ public class DgPic {
 
     private String saveNewImage(final BufferedImage image, final byte[] imageData) {
         try {
-            log.info("Trying to upload a new image of resolution {}x{}", image.getWidth(), image.getHeight());
+            log.info("Saving new image of resolution {}x{}", image.getWidth(), image.getHeight());
 
             final String name = getNextFileName();
 
@@ -535,7 +565,7 @@ public class DgPic {
 
             // TODO tryToUpdateGallery
 
-            log.info("Uploaded a new image of size {}", FileUtils.byteCountToDisplaySize(imageData.length));
+            log.info("Uploaded a new image of size {}", byteCountToDisplaySize(imageData.length));
 
             return name;
         } catch (Exception e) {
@@ -544,34 +574,76 @@ public class DgPic {
     }
 
     private String uploadImage(final InputStream inputStream) throws IOException {
-        final BufferedImage inputImage = ImageIO.read(inputStream);
-
-        final ByteArrayOutputStream pngOut = new ByteArrayOutputStream();
-        ImageIO.write(inputImage, "png", pngOut);
-
         final int twoMegabytes = 2 * 1024 * 1024;
 
-        if (pngOut.size() <= twoMegabytes) {
-            return saveNewImage(inputImage, pngOut.toByteArray());
+        log.info("Uploading new image");
+
+        try (final MemoryCacheImageInputStream input = new MemoryCacheImageInputStream(inputStream)) {
+            final IIORegistry registry = IIORegistry.getDefaultInstance();
+            final ImageReaderSpi[] readers = new ImageReaderSpi[]{
+                    registry.getServiceProviderByClass(JPEGImageReaderSpi.class),
+                    registry.getServiceProviderByClass(PNGImageReaderSpi.class),
+                    registry.getServiceProviderByClass(GIFImageReaderSpi.class),
+                    registry.getServiceProviderByClass(BMPImageReaderSpi.class)
+            };
+
+            for (final ImageReaderSpi reader : readers) {
+                if (reader.canDecodeInput(input)) {
+                    log.info("Decoding with {}", reader.getPluginClassName());
+
+                    ImageReader instance = null;
+
+                    try {
+                        instance = reader.createReaderInstance();
+
+                        final ImageReadParam defaultReadParam = instance.getDefaultReadParam();
+
+                        instance.setInput(input, true, true);
+
+                        final BufferedImage readImage = instance.read(0, defaultReadParam);
+
+                        final boolean wasOriginallyJpg = reader instanceof JPEGImageReaderSpi;
+
+                        if (!wasOriginallyJpg) {
+                            final ByteArrayOutputStream pngOut = new ByteArrayOutputStream();
+                            ImageIO.write(readImage, "png", pngOut);
+
+                            log.info("PNG size: {}", byteCountToDisplaySize(pngOut.size()));
+
+                            if (pngOut.size() <= twoMegabytes) {
+                                return saveNewImage(readImage, pngOut.toByteArray());
+                            }
+                        }
+
+                        // JPG doesn't support transparency!
+                        final BufferedImage jpgImage = new BufferedImage(
+                                readImage.getWidth(null),
+                                readImage.getHeight(null),
+                                BufferedImage.TYPE_INT_RGB
+                        );
+
+                        jpgImage.getGraphics().drawImage(readImage, 0, 0 , null);
+                        jpgImage.getGraphics().dispose();
+
+                        final ByteArrayOutputStream jpgOut = new ByteArrayOutputStream();
+                        ImageIO.write(jpgImage, "jpg", jpgOut);
+
+                        log.info("Converted to JPEG of size: {}", byteCountToDisplaySize(jpgOut.size()));
+
+                        if (jpgOut.size() <= twoMegabytes) {
+                            return saveNewImage(readImage, jpgOut.toByteArray());
+                        }
+
+                        throw new InvalidInputException("Image is too large");
+                    } finally {
+                        if (instance != null) {
+                            instance.dispose();
+                        }
+                    }
+                }
+            }
         }
 
-        // JPG doesn't support transparency!
-        final BufferedImage jpgImage = new BufferedImage(
-                inputImage.getWidth(null),
-                inputImage.getHeight(null),
-                BufferedImage.TYPE_INT_RGB
-        );
-
-        jpgImage.getGraphics().drawImage(inputImage, 0, 0 , null);
-        jpgImage.getGraphics().dispose();
-
-        final ByteArrayOutputStream jpgOut = new ByteArrayOutputStream();
-        ImageIO.write(jpgImage, "jpg", jpgOut);
-
-        if (jpgOut.size() <= twoMegabytes) {
-            return saveNewImage(inputImage, jpgOut.toByteArray());
-        }
-
-        throw new IllegalArgumentException("Image is too large to be saved");
+        throw new InvalidInputException("Unsupported image format");
     }
 }
